@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Output Calculator</title>
+    <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
+    <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+        }
+        .container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .input-group input {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        pre {
+            text-align: left;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Output Calculator</h1>
+        <div class="input-group">
+            <label for="demand">Chip demand (pcs):</label>
+            <input type="number" id="demand" value="1000">
+        </div>
+        <div class="input-group">
+            <label for="K1">front-end setting (hours):</label>
+            <input type="number" id="K1" value="2" step="0.1">
+        </div>
+        <div class="input-group">
+            <label for="K2">back-end setting (hours):</label>
+            <input type="number" id="K2" value="2" step="0.1">
+        </div>
+        <div class="input-group">
+            <label for="config_uph">Units Per Output (UPH):</label>
+            <input type="number" id="config_uph" value="100">
+        </div>
+        <div class="input-group">
+            <label for="start_date">order date (YYYY-MM-DD):</label>
+            <input type="date" id="start_date">
+        </div>
+        <div class="input-group">
+            <label for="start_time">order time (HH:MM):</label>
+            <input type="time" id="start_time">
+        </div>
+        <button id="calculate" pys-onClick="calculate">Estimate shipping time</button>
+        <pre id="result"></pre>
+    </div>
+
+    <py-config>
+        packages = ["datetime"]
+    </py-config>
+
+    <py-script>
+import json
+from datetime import datetime, timedelta
+
+# 假設我們已經有了 working_time.json 的內容
+working_time = {
+    "setting": {
+        "start_time": "09:00",
+        "end_time": "18:00",
+        "working_days": [0, 1, 2, 3, 4, 5, 6]
+    },
+    "production": {
+        "start_time": "00:00",
+        "end_time": "23:59",
+        "working_days": [0, 1, 2, 3, 4, 5, 6]
+    },
+    "packing": {
+        "start_time": "09:00",
+        "end_time": "18:00",
+        "working_days": [1, 2, 3, 4, 5]
+    }
+}
+
+def add_working_hours(start_datetime, hours, phase):
+    current_datetime = start_datetime
+    if phase == "production":
+        current_datetime += timedelta(hours=hours)
+        return current_datetime
+
+    while hours > 0:
+        if is_valid_working_time(current_datetime, phase):
+            end_of_day = current_datetime.replace(hour=int(working_time[phase]["end_time"].split(":")[0]),
+                                                  minute=int(working_time[phase]["end_time"].split(":")[1]),
+                                                  second=0, microsecond=0)
+            remaining_hours_today = (end_of_day - current_datetime).total_seconds() / 3600
+
+            if remaining_hours_today >= hours:
+                current_datetime += timedelta(hours=hours)
+                hours = 0
+            else:
+                current_datetime = end_of_day
+                hours -= remaining_hours_today
+        current_datetime = next_valid_start(current_datetime, phase)
+    return current_datetime
+
+def is_valid_working_time(dt, phase):
+    start_hour, start_minute = map(int, working_time[phase]["start_time"].split(":"))
+    end_hour, end_minute = map(int, working_time[phase]["end_time"].split(":"))
+    working_days = working_time[phase]["working_days"]
+    return (dt.weekday() in working_days and
+            (dt.hour > start_hour or (dt.hour == start_hour and dt.minute >= start_minute)) and
+            (dt.hour < end_hour or (dt.hour == end_hour and dt.minute < end_minute)))
+
+def next_valid_start(dt, phase):
+    while not is_valid_working_time(dt, phase):
+        dt += timedelta(minutes=1)
+    return dt
+
+def estimate_production_time(demand, K1, K2, config_uph, start_datetime):
+    setting_start = next_valid_start(start_datetime, "setting")
+    setting_end = add_working_hours(setting_start, K1, "setting")
+
+    production_start = setting_end
+    config_production_time = demand / config_uph
+
+    actual_production_end = production_start + timedelta(hours=config_production_time)
+
+    packing_start = next_valid_start(actual_production_end, "packing")
+    packing_end = add_working_hours(packing_start, K2, "packing")
+    shipping_time = next_valid_start(packing_end, "packing")
+
+    return {
+        "setting_start": setting_start,
+        "setting_end": setting_end,
+        "production_start": production_start,
+        "production_end": actual_production_end,
+        "packing_start": packing_start,
+        "packing_end": packing_end,
+        "shipping_time": shipping_time,
+        "actual_production_time": (actual_production_end - production_start).total_seconds() / 3600,
+    }
+
+def time_format(date):
+    return date.strftime("%a, %b %d, %Y, %I:%M:%S %p")
+
+def calculate(*args, **kwargs):
+    demand = int(Element("demand").value)
+    K1 = float(Element("K1").value)
+    K2 = float(Element("K2").value)
+    config_uph = float(Element("config_uph").value)
+    start_date = Element("start_date").value
+    start_time = Element("start_time").value
+    start_datetime = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+
+    times = estimate_production_time(demand, K1, K2, config_uph, start_datetime)
+
+    result = f"""
+    front-end start: {time_format(times['setting_start'])}
+    front-end end: {time_format(times['setting_end'])}
+    front-end total: {(times['setting_end'] - times['setting_start']).total_seconds() / 3600:.2f} hours
+    programming start: {time_format(times['production_start'])}
+    programming end: {time_format(times['production_end'])}
+    total programming time: {times['actual_production_time']:.2f} hours
+    back-end start: {time_format(times['packing_start'])}
+    back-end end: {time_format(times['packing_end'])}
+    total back-end time: {(times['packing_end'] - times['packing_start']).total_seconds() / 3600:.2f} hours
+    Shipping estimation time: {time_format(times['shipping_time'])}
+    Order to shipping time: {(times['shipping_time'] - times['setting_start']).total_seconds() / 3600:.2f} hours
+    """
+
+    Element("result").write(result)
+
+# Set default date to today
+from datetime import date
+today = date.today().strftime("%Y-%m-%d")
+Element("start_date").write(today)
+    </py-script>
+</body>
+</html>
